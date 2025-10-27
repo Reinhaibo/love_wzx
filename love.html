@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>王紫萱</title>
+  <style>
+    * { padding: 0; margin: 0; }
+    html, body { height: 100%; background: #000; }
+    canvas { position: absolute; width: 100%; height: 100%; }
+    .text {
+      position: absolute; top: 20px; width: 100%;
+      text-align: center; font-size: 24px; color: #ff69b4;
+      text-shadow: 0 0 8px rgba(255,105,180,.7);
+    }
+    .credit {
+      position: fixed; bottom: 10px; right: 10px;
+      font-size: 14px; color: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <div class="text">我爱你</div>
+  <canvas id="pinkboard"></canvas>
+  <div class="credit">2025/10/27</div>
+
+  <script>
+    /* ==================== 可调参数 ==================== */
+    const PHOTO_CHANGE_MS = 3000;   // 每张照片显示时长
+    const HEART_SIZE      = 520;    // 中央心形的近似大小（像素）
+    const PHOTO_BORDER    = true;   // 是否给心形照片加白色描边
+
+    // 在这里填你的照片路径（相对路径）
+    const photoUrls = [
+      "picture/1.jpg",
+      "picture/2.jpg",
+      "picture/3.jpg",
+      "picture/4.jpg",
+      "picture/5.jpg",
+      "picture/6.jpg",
+      "picture/7.jpg",
+      "picture/8.jpg",
+      "picture/9.jpg",
+      "picture/10.jpg",
+      "picture/11.jpg",
+      "picture/12.jpg",
+      "picture/13.jpg",
+      "picture/14.jpg",
+      "picture/15.jpg",
+    ];
+
+    /* ==================== 原有设置 ==================== */
+    var settings = {
+      particles: { length: 800, duration: 3, velocity: 150, effect: -0.75, size: 40 },
+      textParticles: { length: 200, duration: 5, velocity: 100 }
+    };
+
+    /* ============ RAF 兼容 ============ */
+    (function () {
+      var b = 0, c = ["ms","moz","webkit","o"];
+      for (var a = 0; a < c.length && !window.requestAnimationFrame; ++a) {
+        window.requestAnimationFrame = window[c[a] + "RequestAnimationFrame"];
+        window.cancelAnimationFrame = window[c[a] + "CancelAnimationFrame"] || window[c[a] + "CancelRequestAnimationFrame"];
+      }
+      if (!window.requestAnimationFrame) {
+        window.requestAnimationFrame = function (h) {
+          var d = new Date().getTime();
+          var f = Math.max(0, 16 - (d - b));
+          var g = window.setTimeout(function () { h(d + f); }, f);
+          b = d + f; return g;
+        };
+      }
+      if (!window.cancelAnimationFrame) {
+        window.cancelAnimationFrame = function (d) { clearTimeout(d); };
+      }
+    })();
+
+    /* ============ 基础 Point / 粒子类 ============ */
+    var Point = (function () {
+      function Point(x, y) { this.x = x ?? 0; this.y = y ?? 0; }
+      Point.prototype.clone = function () { return new Point(this.x, this.y); };
+      Point.prototype.length = function (len) {
+        if (len === undefined) return Math.hypot(this.x, this.y);
+        this.normalize(); this.x *= len; this.y *= len; return this;
+      };
+      Point.prototype.normalize = function () {
+        var l = this.length(); this.x /= l; this.y /= l; return this;
+      };
+      return Point;
+    })();
+
+    var Particle = (function () {
+      function Particle() { this.position = new Point(); this.velocity = new Point(); this.acceleration = new Point(); this.age = 0; }
+      Particle.prototype.initialize = function (x, y, dx, dy) {
+        this.position.x = x; this.position.y = y;
+        this.velocity.x = dx; this.velocity.y = dy;
+        this.acceleration.x = dx * settings.particles.effect;
+        this.acceleration.y = dy * settings.particles.effect;
+        this.age = 0;
+      };
+      Particle.prototype.update = function (dt) {
+        this.position.x += this.velocity.x * dt;
+        this.position.y += this.velocity.y * dt;
+        this.velocity.x += this.acceleration.x * dt;
+        this.velocity.y += this.acceleration.y * dt;
+        this.age += dt;
+      };
+      Particle.prototype.draw = function (ctx, image) {
+        function ease(t) { return --t * t * t + 1; }
+        var size = image.width * ease(this.age / settings.particles.duration);
+        ctx.globalAlpha = 1 - this.age / settings.particles.duration;
+        ctx.drawImage(image, this.position.x - size / 2, this.position.y - size / 2, size, size);
+      };
+      return Particle;
+    })();
+
+    var TextParticle = (function () {
+      function TextParticle() { this.position = new Point(); this.velocity = new Point(); this.age = 0; this.text = ""; }
+      TextParticle.prototype.initialize = function (x, y, dx, dy, text) {
+        this.position.x = x; this.position.y = y; this.velocity.x = dx; this.velocity.y = dy;
+        this.age = 0; this.text = text;
+      };
+      TextParticle.prototype.update = function (dt) {
+        this.position.x += this.velocity.x * dt;
+        this.position.y += this.velocity.y * dt;
+        this.age += dt;
+      };
+      TextParticle.prototype.draw = function (ctx) {
+        ctx.globalAlpha = 1 - this.age / settings.textParticles.duration;
+        ctx.font = "bold 18px Arial"; ctx.fillStyle = "#8a2be2";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText(this.text, this.position.x, this.position.y);
+      };
+      return TextParticle;
+    })();
+
+    var ParticlePool = (function () {
+      var particles, firstActive = 0, firstFree = 0, duration = settings.particles.duration;
+      function ParticlePool(length) {
+        particles = new Array(length);
+        for (var i = 0; i < particles.length; i++) particles[i] = new Particle();
+      }
+      ParticlePool.prototype.add = function (x, y, dx, dy) {
+        particles[firstFree].initialize(x, y, dx, dy);
+        firstFree++; if (firstFree == particles.length) firstFree = 0;
+        if (firstActive == firstFree) firstActive++;
+        if (firstActive == particles.length) firstActive = 0;
+      };
+      ParticlePool.prototype.update = function (dt) {
+        var i;
+        if (firstActive < firstFree) { for (i = firstActive; i < firstFree; i++) particles[i].update(dt); }
+        if (firstFree < firstActive) {
+          for (i = firstActive; i < particles.length; i++) particles[i].update(dt);
+          for (i = 0; i < firstFree; i++) particles[i].update(dt);
+        }
+        while (particles[firstActive].age >= duration && firstActive != firstFree) {
+          firstActive++; if (firstActive == particles.length) firstActive = 0;
+        }
+      };
+      ParticlePool.prototype.draw = function (ctx, image) {
+        var i;
+        if (firstActive < firstFree) { for (i = firstActive; i < firstFree; i++) particles[i].draw(ctx, image); }
+        if (firstFree < firstActive) {
+          for (i = firstActive; i < particles.length; i++) particles[i].draw(ctx, image);
+          for (i = 0; i < firstFree; i++) particles[i].draw(ctx, image);
+        }
+      };
+      return ParticlePool;
+    })();
+
+    var TextParticlePool = (function () {
+      var particles, firstActive = 0, firstFree = 0, duration = settings.textParticles.duration;
+      function TextParticlePool(length) {
+        particles = new Array(length);
+        for (var i = 0; i < particles.length; i++) particles[i] = new TextParticle();
+      }
+      TextParticlePool.prototype.add = function (x, y, dx, dy, text) {
+        particles[firstFree].initialize(x, y, dx, dy, text);
+        firstFree++; if (firstFree == particles.length) firstFree = 0;
+        if (firstActive == firstFree) firstActive++;
+        if (firstActive == particles.length) firstActive = 0;
+      };
+      TextParticlePool.prototype.update = function (dt) {
+        var i;
+        if (firstActive < firstFree) { for (i = firstActive; i < firstFree; i++) particles[i].update(dt); }
+        if (firstFree < firstActive) {
+          for (i = firstActive; i < particles.length; i++) particles[i].update(dt);
+          for (i = 0; i < firstFree; i++) particles[i].update(dt);
+        }
+        while (particles[firstActive].age >= duration && firstActive != firstFree) {
+          firstActive++; if (firstActive == particles.length) firstActive = 0;
+        }
+      };
+      TextParticlePool.prototype.draw = function (ctx) {
+        var i;
+        if (firstActive < firstFree) { for (i = firstActive; i < firstFree; i++) particles[i].draw(ctx); }
+        if (firstFree < firstActive) {
+          for (i = firstActive; i < particles.length; i++) particles[i].draw(ctx);
+          for (i = 0; i < firstFree; i++) particles[i].draw(ctx);
+        }
+      };
+      return TextParticlePool;
+    })();
+
+    /* ============ 核心：爱心曲线、粒子心形图片、照片心形裁剪 ============ */
+    function pointOnHeart(t) {
+      // 原公式：心形轮廓
+      return new Point(
+        320 * Math.pow(Math.sin(t), 3),
+        260 * Math.cos(t) - 100 * Math.cos(2 * t) - 40 * Math.cos(3 * t) - 20 * Math.cos(4 * t) + 50
+      );
+    }
+
+    // 粒子使用的小心形图
+    var heartImage = (function () {
+      var canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
+      canvas.width = settings.particles.size; canvas.height = settings.particles.size;
+      function to(t) {
+        var p = pointOnHeart(t);
+        p.x = settings.particles.size / 2 + (p.x * settings.particles.size) / 700;
+        p.y = settings.particles.size / 2 - (p.y * settings.particles.size) / 700;
+        return p;
+      }
+      ctx.beginPath();
+      var t = -Math.PI, p = to(t);
+      ctx.moveTo(p.x, p.y);
+      while (t < Math.PI) { t += 0.01; p = to(t); ctx.lineTo(p.x, p.y); }
+      ctx.closePath(); ctx.fillStyle = "#ff69b4"; ctx.fill();
+
+      // 粒子中心的字
+      ctx.font = "bold 18px Arial";
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("王紫萱", canvas.width / 2, canvas.height / 2);
+
+      var image = new Image(); image.src = canvas.toDataURL();
+      return image;
+    })();
+
+    // 预加载照片
+    const loadedPhotos = [];
+    let   currentPhotoIndex = 0;
+    (function preload() {
+      photoUrls.forEach(url => {
+        const img = new Image();
+        img.src = url;
+        loadedPhotos.push(img);
+      });
+    })();
+
+    // 定时切换照片
+    setInterval(() => {
+      if (loadedPhotos.length > 0) {
+        currentPhotoIndex = (currentPhotoIndex + 1) % loadedPhotos.length;
+      }
+    }, PHOTO_CHANGE_MS);
+
+    // 在主画布中心绘制“心形裁剪”的照片
+    function drawHeartPhoto(ctx, cx, cy, size) {
+      if (!loadedPhotos.length) return;
+      const img = loadedPhotos[currentPhotoIndex];
+      if (!img.complete) return; // 尚未加载好
+
+      // 构造心形路径（与 pointOnHeart 同形，缩放到 size）
+      ctx.save();
+      ctx.beginPath();
+      let t = -Math.PI;
+      const scale = size / 700; // 700 是上面心形的归一化尺度
+      let p = pointOnHeart(t);
+      let x = cx + p.x * scale;
+      let y = cy - p.y * scale;
+      ctx.moveTo(x, y);
+      while (t < Math.PI) {
+        t += 0.01;
+        p = pointOnHeart(t);
+        x = cx + p.x * scale;
+        y = cy - p.y * scale;
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.clip();
+
+      // 计算等比填充到“size × size”的区域（居中 cover）
+      const box = size;
+      const iw = img.naturalWidth || img.width;
+      const ih = img.naturalHeight || img.height;
+      const s = Math.max(box / iw, box / ih);
+      const dw = iw * s, dh = ih * s;
+
+      ctx.drawImage(img, cx - dw / 2, cy - dh / 2, dw, dh);
+      ctx.restore();
+
+      // 可选：描边一圈
+      if (PHOTO_BORDER) {
+        ctx.save();
+        ctx.beginPath();
+        t = -Math.PI; p = pointOnHeart(t);
+        x = cx + p.x * scale; y = cy - p.y * scale;
+        ctx.moveTo(x, y);
+        while (t < Math.PI) { t += 0.01; p = pointOnHeart(t); x = cx + p.x * scale; y = cy - p.y * scale; ctx.lineTo(x, y); }
+        ctx.closePath();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    /* ============ 主循环：中心心形照片 + 粒子心形 + 文本粒子 ============ */
+    (function (canvas) {
+      var ctx = canvas.getContext("2d"),
+          particles = new ParticlePool(settings.particles.length),
+          textParticles = new TextParticlePool(settings.textParticles.length),
+          particleRate = settings.particles.length / settings.particles.duration,
+          textParticleRate = settings.textParticles.length / settings.textParticles.duration,
+          time;
+
+      function render() {
+        requestAnimationFrame(render);
+        var newTime = Date.now() / 1000, dt = newTime - (time || newTime); time = newTime;
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1) 先绘制中心“心形照片”
+        drawHeartPhoto(ctx, canvas.width / 2, canvas.height / 2, HEART_SIZE);
+
+        // 2) 再绘制爱心粒子
+        var amount = particleRate * dt;
+        for (var i = 0; i < amount; i++) {
+          var pos = pointOnHeart(Math.PI - 2 * Math.PI * Math.random());
+          var dir = pos.clone().length(settings.particles.velocity);
+          particles.add(canvas.width / 2 + pos.x, canvas.height / 2 - pos.y, dir.x, -dir.y);
+        }
+        particles.update(dt);
+        particles.draw(ctx, heartImage);
+
+        // 3) 文本粒子（可改成你们的缩写或表白语）
+        var textAmount = textParticleRate * dt;
+        for (var j = 0; j < textAmount; j++) {
+          var textPos = new Point(Math.random() * canvas.width, Math.random() * canvas.height);
+          var textDir = new Point((Math.random() - 0.5) * settings.textParticles.velocity, (Math.random() - 0.5) * settings.textParticles.velocity);
+          textParticles.add(textPos.x, textPos.y, textDir.x, textDir.y, "wzx");
+        }
+        textParticles.update(dt);
+        textParticles.draw(ctx);
+      }
+
+      function onResize() {
+        canvas.width = canvas.clientWidth;
+        canvas.height = canvas.clientHeight;
+      }
+      window.onresize = onResize;
+
+      setTimeout(function () {
+        onResize();
+        render();
+      }, 10);
+
+    })(document.getElementById("pinkboard"));
+  </script>
+</body>
+</html>
